@@ -11,7 +11,6 @@ import re
 import warnings
 warnings.filterwarnings("ignore", message="The loop argument is deprecated since Python 3.8, and scheduled for removal in Python 3.10.")
 
-
 api_id =  # your api_id here (int)
 api_hash =  # your api_hash_here (str)
 phone =  # your phone number here (str)
@@ -20,68 +19,81 @@ client = TelegramClient(username, api_id, api_hash, sequential_updates=True)
 client.start(phone)
 stickers =  'kabookseeno' # your sticker packname here (str)
 
-async def main():
 
-    async def get_stickers(pack_name):
-        sticker_sets = await client(GetAllStickersRequest(0))
-
-        sticker_set = sticker_sets.sets[
-            {sticker_sets.sets[i].short_name: i for i in range(len(sticker_sets.sets))}[pack_name]]
-
-        stickers = await client(GetStickerSetRequest(
-            stickerset=InputStickerSetID(
-                id=sticker_set.id, access_hash=sticker_set.access_hash
-            )))
-        return stickers
+filenames = ['original.txt', 'target.txt']
 
 
+
+
+
+local_path = '/home/heyzec/Documents/Stickers/kabookseeno'
+
+
+async def get_stickers(pack_name):
+    """Given pack name, returns a list of Sticker Documents"""
+    sticker_sets = await client(GetAllStickersRequest(0))
+
+    sticker_set = sticker_sets.sets[
+        {sticker_sets.sets[i].short_name: i for i in range(len(sticker_sets.sets))}[pack_name]]
+
+    stickers = await client(GetStickerSetRequest(
+        stickerset=InputStickerSetID(
+            id=sticker_set.id, access_hash=sticker_set.access_hash
+        )))
+    return stickers
+
+
+
+
+async def calc_sticker_hashes():
+    global stickers
+    print("Hold on, getting stickers...")
     stickers = await get_stickers(stickers)
 
-    hashes = ''
-    for i in stickers.documents:
-        data = await client.download_file(i)
+    tele_hashes = {}
+    for doc in stickers.documents:
+
+        emoji = doc.attributes[1].alt
+        data = await client.download_file(doc)
         with subprocess.Popen(f"cat -| sha1sum", 
             shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as p:
-            hashes += p.communicate(data)[0].decode()[:40] + '\n'
-    with open('hashes_tele.txt', 'w') as f:
-        f.write(hashes)
+            tele_hashes[p.communicate(data)[0].decode()[:40]] = emoji
 
 
-    local_sticker_hashes = {}
-    local_sticker_path = '/home/heyzec/Desktop/Stickers/kabookseeno'
-    local_sticker_names = sorted(i for i in os.listdir(local_sticker_path) if i[-4:] == '.tgs')
-    for i in local_sticker_names:
-        with open(local_sticker_path + '/' + i, 'rb') as f:
+
+
+    local_hashes = {}
+    local_names = sorted(i for i in os.listdir(local_path) if i[-4:] == '.tgs')
+    for i in local_names:
+        with open(local_path + '/' + i, 'rb') as f:
             data = f.read()
         with subprocess.Popen(f"cat -| sha1sum", 
             shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE) as p:
-            local_sticker_hashes[p.communicate(data)[0].decode()[:40]] = i
-    with open('hashes_local.txt', 'w') as f:
-        f.write(''.join(k + '\n' for k in local_sticker_hashes))
+            local_hashes[p.communicate(data)[0].decode()[:40]] = i
+
+    return tele_hashes, local_hashes
 
 
+def diff(l1, l2):
+    def l2l(l): #list to lines
+        return ''.join(str(i) + '\n' for i in l)
 
-    filenames = ['hashes_tele.txt', 'hashes_local.txt']
-    # filenames = ['s1.txt', 's2.txt']
+    prc = subprocess.run(f"diff <(echo '{l2l(l1)}') <(echo '{l2l(l2)}')",
+            shell=True, executable='/bin/bash', capture_output=True)
+    return prc.stdout.decode()
 
-    with open(filenames[0]) as f:
-        s1 = f.read().strip().split('\n')
-    with open(filenames[1]) as f:
-        s2 = f.read().strip().split('\n')
-    attempt = s1.copy()
-
-    output = subprocess.run(f"diff {filenames[0]} {filenames[1]}",
-        shell=True, capture_output=True).stdout.decode()
-
-
+def get_changes_from_diff_output(diff_output):
+    
     changes = []
-    for line in output.split('\n'):
-        if len(line) == 0:
-            continue
-        elif line[0] in '><':
+    for line in diff(original, target).split('\n'):
+        if len(line) != 0 and line[0] in '><':
             changes += [('+' if line[0] == '>' else '-', line[2:])]
 
-    # Find moves
+
+    if ''.join(change[1] for change in changes).isdigit():
+        changes = [(change[0], int(change[1])) for change in changes]
+
+    # Convert objects added and removed to move
     added = set(e[1] for e in changes if e[0] == '+')
     removed = set(e[1] for e in changes if e[0] == '-')
     dupes = [e for e in added if e in removed][::-1]
@@ -95,140 +107,193 @@ async def main():
         changes.insert(0, ('>',  e))
         changes.remove(a)
         changes.remove(r)
+   
+   
+    changes = sorted(changes, key=lambda change: "-+>".index(change[0]))
+    return changes
 
-    def add_sticker(to_add, neighbour=None):
-        nonlocal attempt
-        attempt += [to_add]
+def name(n):
+    def find_in_dict(d, value):
+        for k, v in d.items():
+            if v == value:
+                return k
+        raise KeyError(f"{v} not found in {d}")
 
-        
-        if not neighbour is None:
-            order_sticker(to_add, neighbour=neighbour)
+    _ = find_in_dict(hash_dict, n)
+    return local[_]
+
+def add(attempt, to_add, neighbour=None):
+    attempt += [to_add]
+    
+    if not neighbour is None:
+        order_sticker(to_add, neighbour=neighbour)
+
+    async def wrapper(conv):
+        async def no_duff(conv, to_add):
+            await conv.send_message('/addsticker')
+            await conv.get_response()
+            await conv.send_message('kabookseeno')
+            await conv.get_response()
+            await conv.send_file(f"{local_path}/{local_hashes[to_add]}")
+            assert "Thanks!" in (await conv.get_response()).text
+            await conv.send_message(local_hashes[to_add])
+            await conv.get_response()
+            if not neighbour is None:
+                _ = order(to_add, neighbour=neighbour)
+                await _(conv)
+
+        return await no_duff(conv, to_add)
+    return wrapper
 
 
 
 
-        async def wrapper(conv):
-            async def no_duff(conv, to_add):
-                await conv.send_message('/addsticker')
-                await conv.get_response()
-                await conv.send_message('kabookseeno')
-                await conv.get_response()
-                await conv.send_file(f"{local_sticker_path}/{local_sticker_hashes[to_add]}")
-                assert "Thanks!" in (await conv.get_response()).text
-                await conv.send_message(local_sticker_hashes[to_add])
-                await conv.get_response()
-                if not neighbour is None:
-                    _ = order_sticker(to_add, neighbour=neighbour)
-                    await _(conv)
+def delete(attempt, to_del):
+    index = attempt.index(to_del)
+    attempt.pop(index)
+    print(f"Del index: {index}")
 
-            return await no_duff(conv, to_add)
-        return wrapper
-
-    def del_sticker(to_del):
-        nonlocal attempt
-        index = attempt.index(to_del)
-        attempt.pop(index)
-        print(f"Del index: {index}")
-
-
-        async def wrapper(conv):
-            async def no_duff(conv, to_del):
-                await conv.send_message('/packstats')
-                await send_sticker(conv, to_del)
-                await conv.send_message('This message will be deleted. Send `Yes, I am totally sure` to continue.')
-                
-                yay = False
-                while True:
-                    await asyncio.sleep(1)
-                    x = client.iter_messages('Stickers')
-                    for _ in range(3):
-                        y = (await x.__anext__()).text
-                        if y == "Yes, I am totally sure":
-                            yay = True
-                            break
-                    if yay:
+    async def wrapper(conv):
+        async def no_duff(conv, to_del):
+            await conv.send_message('/packstats')
+            await send_sticker(conv, to_del)
+            await conv.send_message('This message will be deleted. Send `Yes, I am totally sure` to continue.')
+            
+            yay = False
+            while True:
+                await asyncio.sleep(1)
+                x = client.iter_messages('Stickers')
+                for _ in range(3):
+                    y = (await x.__anext__()).text
+                    if y == "Yes, I am totally sure":
+                        yay = True
                         break
-                        
-                        
-                
-                await conv.send_message('/delsticker')
-                await conv.get_response()
-                await send_sticker(conv, to_del)
-            return await no_duff(conv, index)
-        return wrapper
+                if yay:
+                    break
+                    
+                    
+            
+            await conv.send_message('/delsticker')
+            await conv.get_response()
+            await send_sticker(conv, to_del)
+        return await no_duff(conv, index)
+    return wrapper
 
 
-    def order_sticker(to_move, neighbour):
-        nonlocal attempt
-        index1 = attempt.index(to_move)
-        obj = attempt.pop(index1)
 
-        index2 = attempt.index(neighbour) + 1
-        attempt.insert(index2, obj)
-
-        async def wrapper(conv):
-            async def no_duff(conv, to_move, neighbour):
-                await conv.send_message('/ordersticker')
-                await conv.get_response()
-                await send_sticker(conv, to_move)
-                await send_sticker(conv, neighbour)
-            return await no_duff(conv, index1, index2)
-        return wrapper
-
-    async def send_sticker(conv, n):
-        await conv.send_file(file=stickers.documents[n])
-        return (await conv.get_response()).text
+def order(attempt, to_move, neighbour):
     
+    index1 = attempt.index(to_move)
+    attempt.pop(index1)
 
-    if changes != []:
+    index2 = attempt.index(neighbour) + 1
+    attempt.insert(index2, to_move)
+    print(f"Attempt: {attempt}")
+
+    async def wrapper(conv):
+        async def no_duff(conv, to_move, neighbour):
+            await conv.send_message('/ordersticker')
+            await conv.get_response()
+            await conv.send_message('kabookseeno')
+            await conv.get_response()
+            # print(f"Moving {to_move}: {name(to_move)} to beside {neighbour}: {name(neighbour)}...")
+            input('>>>')
+            await send_sticker(conv, to_move)
+            await send_sticker(conv, neighbour)
+        return await no_duff(conv, index1, index2)
+    return wrapper
+
+async def send_sticker(conv, n):
+    document = stickers.documents[n]
+    emoji = document.attributes[1].alt
+    print(f"I'm sending {emoji}")
+    await conv.send_file(file=document)
+    return (await conv.get_response()).text
+
+
+#import random
+#target = list(range(18))
+#original = target.copy()
+#random.shuffle(original)
+#original = [1, 6, 2, 5, 3, 4]
+#target = [1, 2, 3, 4, 5, 6]
+
+
+tele, local = client.loop.run_until_complete(calc_sticker_hashes())
+original = list(tele.keys())
+target = list(local.keys())
+hash_dict = {}
+for i, e in enumerate(target):
+    hash_dict[e] = i
+target = list(range(len(target)))
+for i in range(len(original)):
+    try:
+        original[i] = hash_dict[original[i]]
+    except KeyError:
+        index = len(hash_dict)
+        hash_dict[index] = original[i]
+        original[index] = original[i]
+
+
+# print('\n'.join(f"{k} {v}" for k,v in tele.items()))
+# print()
+# print('\n'.join(f"{k} {v}" for k,v in local.items()))
+# input()
+
+
+changes = get_changes_from_diff_output(diff(original, target))
+attempt = original.copy()
+
+
+tasks = []
+for i in range(len(changes)):
+    change = changes[i]
+    if change[0] != '-':
+        print(f"{change[0]} {change[1]} {name(change[1])}")
+    else:
+        print(f"{change[0]} ?")
+
+    if change[0] == '>':
+        to_move = change[1]
+        index = target.index(to_move)
+        index -= 1
+        neighbour = target[index]
+        # If neighbour will be moved, pick new neighbour
+        while index != -1 and neighbour in [change[1] for change in changes if change is not None]:
+            index -= 1
+            old = neighbour
+            neighbour = target[index]
+            # print(f"Neighbour changed from {old} to {neighbour}")
+
+        if index != -1:
+            tasks += [order(attempt, to_move, neighbour)]
+        else:
+            # print('Sadness and depression', input())
+            neighbour = attempt[0]
+            
+            tasks += [order(attempt, to_move, neighbour)]
+            #print(attempt)
+            tasks += [order(attempt, neighbour, to_move)]
+
+
+    elif change[0] == '+':
+        pass
+    elif change[0] == '-':
+        pass
+
+    changes[i] = None
     
-        changes = sorted(changes, key=lambda change: "-+>".index(change[0]))
-        
-        for change in changes:
-            if change[0] != '-':
-                print(f"{change[0]} {local_sticker_hashes[change[1]]}")
-            else:
-                print(f"{change[0]} ?")
+print()
+#print(f"attempt: {attempt}")
 
 
-        tasks = []
-
-        for change in changes:
-            if change[0] == '>':
-                to_move = change[1]
-                index = s2.index(to_move) - 1
-                
-
-                if index != -1:
-                    neighbour = s2[index]
-                
-                    tasks.append(order_sticker(to_move, neighbour))
-                else:
-                    neighbour = attempt[0]
-                    tasks.append(order_sticker(to_move, neighbour))
-                    print('1')
-                    tasks.append(order_sticker(neighbour, to_move))
-
-
-                # assert index != -1, "Moving stickers to the 1st is unsupported."
-
-            elif change[0] == '+':
-                to_add = change[1]
-                neighbour = s2[s2.index(to_add) - 1]
-                #Adding last sticker may have issue. Examine neighbour
-                tasks.append(add_sticker(to_add, neighbour))
-            elif change[0] == '-':
-                tasks.append(del_sticker(change[1]))
+print(f"Only one pass required? {attempt == target}")
+input("Press any key to proceed.")
 
 
 
-        print(f"Only one pass required? {attempt == s2}")
-        input("Press any key to proceed.")
-
-
-
-
-
+async def main():
+    if tasks != []:
         async with client.conversation('Stickers') as conv:
 
             await conv.send_message('/cancel')
@@ -256,15 +321,15 @@ async def main():
 
 
         async with client.conversation('Stickers') as conv:
-            for i in range(len(local_sticker_names)):
+            for i in range(len(local_names)):
                 
-                l = emoji_pat.findall(local_sticker_names[i])
+                l = emoji_pat.findall(local_names[i])
                 if l != [] and stickers.documents[i].attributes[1].alt != l[0]:
 
                     await conv.send_message('/editsticker')
                     await conv.get_response()
                     await send_sticker(conv, i)
-                    await conv.send_message(local_sticker_names[i])
+                    await conv.send_message(local_names[i])
                     await conv.get_response()
             
 
