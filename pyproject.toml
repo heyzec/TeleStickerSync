@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "telegram-tools"
+version = "0.1.0"
+description = ""
+authors = ["heyzec <61238538+heyzec@users.noreply.github.com>"]
+readme = "README.md"
+# use Poetry only for dependency management but not for packaging
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+telethon = "^1.36.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
