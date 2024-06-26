@@ -1,4 +1,10 @@
-# TeleStickerSync
+# telegram-tools
+
+A collection of useful tools for automating Telegram accounts
+
+## Tools
+
+### TeleStickerSync
 
 Update your Telegram sticker pack from a folder of .tgs files.
 
