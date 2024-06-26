@@ -1,0 +1,7 @@
+# gcloud secrets
+credentials.json
+token.json
+
+# telegram secrets
+anon.session
+
